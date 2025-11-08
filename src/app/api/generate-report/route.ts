@@ -1,0 +1,310 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse } from 'next/server';
+
+export async function GET() {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized', ok: false }, { status: 401 });
+    }
+
+    // Import jsPDF dynamically to avoid SSR issues
+    const jsPDF = (await import('jspdf')).default;
+    await import('jspdf-autotable');
+
+    // Fetch user data
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .eq('user_id', user.id)
+      .single();
+
+    const { data: performance } = await supabase
+      .from('user_performance_summary')
+      .select('*')
+      .eq('user_id', user.id)
+      .single();
+
+    const { data: progressData } = await supabase
+      .from('user_progress')
+      .select('*')
+      .eq('user_id', user.id)
+      .single();
+
+    const { data: cefrLevel } = await supabase
+      .from('cefr_levels')
+      .select(`
+        *,
+        cefr_descriptions (*)
+      `)
+      .eq('user_id', user.id)
+      .eq('is_current', true)
+      .single();
+
+    const { data: achievements } = await supabase
+      .from('user_achievements')
+      .select(`
+        achievement_id,
+        unlocked_at,
+        achievements (*)
+      `)
+      .eq('user_id', user.id)
+      .limit(10);
+
+    const { data: roadmap } = await supabase
+      .from('roadmaps')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('status', 'active')
+      .single();
+
+    // Generate PDF
+    const pdf = new jsPDF();
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    let yPos = 20;
+
+    // Header
+    pdf.setFontSize(24);
+    pdf.setTextColor(139, 92, 246); // Purple
+    pdf.text('Orato Progress Report', pageWidth / 2, yPos, { align: 'center' });
+
+    yPos += 15;
+    pdf.setFontSize(10);
+    pdf.setTextColor(100, 100, 100);
+    pdf.text(`Generated on ${new Date().toLocaleDateString()}`, pageWidth / 2, yPos, { align: 'center' });
+
+    yPos += 15;
+
+    // User Info Section
+    pdf.setFontSize(16);
+    pdf.setTextColor(0, 0, 0);
+    pdf.text('Personal Information', 14, yPos);
+    yPos += 10;
+
+    pdf.setFontSize(10);
+    const userInfo = [
+      ['Name', profile?.full_name || user.email || 'N/A'],
+      ['Email', user.email || 'N/A'],
+      ['Member Since', new Date(user.created_at || '').toLocaleDateString()],
+      ['Current Level', cefrLevel?.level || 'Not assessed yet'],
+    ];
+
+    (pdf as any).autoTable({
+      startY: yPos,
+      head: [],
+      body: userInfo,
+      theme: 'plain',
+      styles: { fontSize: 10 },
+      columnStyles: {
+        0: { fontStyle: 'bold', cellWidth: 50 },
+        1: { cellWidth: 'auto' },
+      },
+    });
+
+    yPos = (pdf as any).lastAutoTable.finalY + 15;
+
+    // CEFR Level Section
+    if (cefrLevel) {
+      pdf.setFontSize(16);
+      pdf.setTextColor(0, 0, 0);
+      pdf.text('CEFR Level Assessment', 14, yPos);
+      yPos += 10;
+
+      pdf.setFontSize(12);
+      pdf.setTextColor(139, 92, 246);
+      pdf.text(`${cefrLevel.level} - ${cefrLevel.cefr_descriptions?.title || ''}`, 14, yPos);
+      yPos += 8;
+
+      pdf.setFontSize(10);
+      pdf.setTextColor(0, 0, 0);
+      const description = cefrLevel.cefr_descriptions?.description || 'No description available';
+      const splitText = pdf.splitTextToSize(description, pageWidth - 28);
+      pdf.text(splitText, 14, yPos);
+      yPos += splitText.length * 5 + 10;
+    }
+
+    // Performance Metrics
+    if (performance) {
+      // Check if we need a new page
+      if (yPos > pageHeight - 60) {
+        pdf.addPage();
+        yPos = 20;
+      }
+
+      pdf.setFontSize(16);
+      pdf.text('Performance Metrics', 14, yPos);
+      yPos += 10;
+
+      const metrics = [
+        ['Fluency Score', `${performance.avg_fluency_score?.toFixed(1) || 0}%`],
+        ['Grammar Score', `${performance.avg_grammar_score?.toFixed(1) || 0}%`],
+        ['Vocabulary Score', `${performance.avg_vocabulary_quiz_score?.toFixed(1) || 0}%`],
+        ['Confidence Score', `${performance.avg_confidence_score?.toFixed(1) || 0}%`],
+        ['Total Recordings', `${performance.total_recordings || 0}`],
+        ['Grammar Quizzes', `${performance.total_grammar_quizzes || 0}`],
+        ['Vocabulary Size', `${performance.vocabulary_size || 0} words`],
+      ];
+
+      (pdf as any).autoTable({
+        startY: yPos,
+        head: [],
+        body: metrics,
+        theme: 'striped',
+        headStyles: { fillColor: [139, 92, 246] },
+        styles: { fontSize: 10 },
+        columnStyles: {
+          0: { fontStyle: 'bold', cellWidth: 80 },
+          1: { cellWidth: 'auto' },
+        },
+      });
+
+      yPos = (pdf as any).lastAutoTable.finalY + 15;
+    }
+
+    // Progress Section
+    if (progressData) {
+      // Check if we need a new page
+      if (yPos > pageHeight - 60) {
+        pdf.addPage();
+        yPos = 20;
+      }
+
+      pdf.setFontSize(16);
+      pdf.text('Learning Progress', 14, yPos);
+      yPos += 10;
+
+      const progressInfo = [
+        ['Current Level', `${progressData.current_level || 1}`],
+        ['Total XP', `${progressData.total_xp || 0}`],
+        ['Current Streak', `${progressData.current_streak || 0} days`],
+        ['Longest Streak', `${progressData.longest_streak || 0} days`],
+        ['Total Sessions', `${progressData.total_sessions || 0}`],
+        ['Words Learned', `${progressData.total_words_learned || 0}`],
+      ];
+
+      (pdf as any).autoTable({
+        startY: yPos,
+        head: [],
+        body: progressInfo,
+        theme: 'striped',
+        headStyles: { fillColor: [139, 92, 246] },
+        styles: { fontSize: 10 },
+      });
+
+      yPos = (pdf as any).lastAutoTable.finalY + 15;
+    }
+
+    // Achievements Section
+    if (achievements && achievements.length > 0) {
+      // Check if we need a new page
+      if (yPos > pageHeight - 80) {
+        pdf.addPage();
+        yPos = 20;
+      }
+
+      pdf.setFontSize(16);
+      pdf.text(`Achievements Unlocked (${achievements.length})`, 14, yPos);
+      yPos += 10;
+
+      const achievementsList = achievements.map((a: any) => [
+        a.achievements?.badge_icon || '🏆',
+        a.achievements?.title || 'Unknown',
+        new Date(a.unlocked_at).toLocaleDateString(),
+      ]);
+
+      (pdf as any).autoTable({
+        startY: yPos,
+        head: [['', 'Achievement', 'Unlocked On']],
+        body: achievementsList,
+        theme: 'striped',
+        headStyles: { fillColor: [139, 92, 246] },
+        styles: { fontSize: 9 },
+        columnStyles: {
+          0: { cellWidth: 15 },
+          1: { cellWidth: 'auto' },
+          2: { cellWidth: 40 },
+        },
+      });
+
+      yPos = (pdf as any).lastAutoTable.finalY + 15;
+    }
+
+    // Roadmap Progress
+    if (roadmap) {
+      // Check if we need a new page
+      if (yPos > pageHeight - 40) {
+        pdf.addPage();
+        yPos = 20;
+      }
+
+      pdf.setFontSize(16);
+      pdf.text('30-Day Roadmap Progress', 14, yPos);
+      yPos += 10;
+
+      const roadmapInfo = [
+        ['Start Date', new Date(roadmap.start_date).toLocaleDateString()],
+        ['Current Day', `${roadmap.current_day} of ${roadmap.total_days}`],
+        ['Completed Days', `${roadmap.completed_days}`],
+        ['Completion Rate', `${roadmap.completion_rate?.toFixed(1) || 0}%`],
+        ['Status', roadmap.status.toUpperCase()],
+      ];
+
+      (pdf as any).autoTable({
+        startY: yPos,
+        head: [],
+        body: roadmapInfo,
+        theme: 'striped',
+        headStyles: { fillColor: [139, 92, 246] },
+        styles: { fontSize: 10 },
+      });
+    }
+
+    // Footer
+    pdf.setFontSize(8);
+    pdf.setTextColor(150, 150, 150);
+    pdf.text(
+      'Generated by Orato - Your English Learning Companion',
+      pageWidth / 2,
+      pageHeight - 10,
+      { align: 'center' }
+    );
+
+    // Log activity (ignore errors)
+    await supabase
+      .from('profile_activity_log')
+      .insert({
+        user_id: user.id,
+        activity_type: 'report_download',
+        activity_details: { timestamp: new Date().toISOString() },
+      })
+      .then(() => {})
+      .catch(() => {});
+
+    // Convert PDF to buffer
+    const pdfBuffer = Buffer.from(pdf.output('arraybuffer'));
+
+    // Return PDF as download
+    return new NextResponse(pdfBuffer, {
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="orato-progress-report-${Date.now()}.pdf"`,
+      },
+    });
+  } catch (error) {
+    console.error('Generate Report API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error', ok: false },
+      { status: 500 }
+    );
+  }
+}

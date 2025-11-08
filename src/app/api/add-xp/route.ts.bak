@@ -1,0 +1,136 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse, NextRequest } from 'next/server';
+
+export async function POST(request: NextRequest) {
+  try {
+    const supabase = createRouteHandlerClient({ cookies });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { xpAmount, activityType, metadata } = body;
+
+    if (!xpAmount || xpAmount <= 0) {
+      return NextResponse.json(
+        { error: 'Invalid XP amount' },
+        { status: 400 }
+      );
+    }
+
+    // Get current progress
+    const { data: progress, error: progressError } = await supabase
+      .from('user_progress')
+      .select('*')
+      .eq('user_id', user.id)
+      .single();
+
+    if (progressError) {
+      console.error('Add XP API: Error fetching progress:', progressError);
+      return NextResponse.json(
+        { error: 'Could not fetch user progress', details: progressError.message },
+        { status: 500 }
+      );
+    }
+
+    const newTotalXp = progress.total_xp + xpAmount;
+    const oldLevel = progress.current_level;
+    const newLevel = calculateLevelFromXp(newTotalXp);
+    const leveledUp = newLevel > oldLevel;
+
+    // Update progress based on activity type
+    const updates: any = {
+      total_xp: newTotalXp,
+      current_level: newLevel,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Update activity-specific stats
+    if (activityType === 'session') {
+      updates.total_sessions = progress.total_sessions + 1;
+
+      // Update streak
+      await supabase.rpc('update_user_streak', { p_user_id: user.id });
+    }
+
+    if (activityType === 'vocabulary' && metadata?.wordsLearned) {
+      updates.total_words_learned = progress.total_words_learned + metadata.wordsLearned;
+    }
+
+    if (activityType === 'fluency' && metadata?.fluencyScore) {
+      updates.best_fluency_score = Math.max(progress.best_fluency_score, metadata.fluencyScore);
+    }
+
+    // Update progress
+    const { error: updateError } = await supabase
+      .from('user_progress')
+      .update(updates)
+      .eq('user_id', user.id);
+
+    if (updateError) {
+      console.error('Add XP API: Error updating progress:', updateError);
+      return NextResponse.json(
+        { error: 'Could not update progress', details: updateError.message },
+        { status: 500 }
+      );
+    }
+
+    // Check for new achievements
+    const checkResponse = await fetch(`${request.nextUrl.origin}/api/check-achievements`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        cookie: request.headers.get('cookie') || '',
+      },
+    });
+
+    let newAchievements = [];
+    if (checkResponse.ok) {
+      const checkData = await checkResponse.json();
+      newAchievements = checkData.newlyUnlocked || [];
+    }
+
+    return NextResponse.json({
+      ok: true,
+      xpAdded: xpAmount,
+      totalXp: newTotalXp,
+      oldLevel,
+      newLevel,
+      leveledUp,
+      newAchievements,
+      message: leveledUp
+        ? `Level up! You're now level ${newLevel}!`
+        : `+${xpAmount} XP earned!`,
+    });
+  } catch (error) {
+    console.error('Add XP API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}
+
+// Helper function to calculate level from XP
+function calculateLevelFromXp(totalXp: number): number {
+  let level = 1;
+  let cumulativeXp = 0;
+
+  while (cumulativeXp <= totalXp) {
+    const xpNeeded = Math.floor(100 * Math.pow(1.5, level - 1));
+    cumulativeXp += xpNeeded;
+    if (cumulativeXp <= totalXp) {
+      level++;
+    }
+  }
+
+  return level;
+}

@@ -1,0 +1,238 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse, NextRequest } from 'next/server';
+
+export async function POST(request: NextRequest) {
+  try {
+    const supabase = createRouteHandlerClient({ cookies });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized', ok: false }, { status: 401 });
+    }
+
+    const formData = await request.formData();
+    const file = formData.get('photo') as File;
+
+    if (!file) {
+      return NextResponse.json(
+        { error: 'No file provided', ok: false },
+        { status: 400 }
+      );
+    }
+
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    if (!allowedTypes.includes(file.type)) {
+      return NextResponse.json(
+        { error: 'Invalid file type. Please upload a JPEG, PNG, WebP, or GIF image.', ok: false },
+        { status: 400 }
+      );
+    }
+
+    // Validate file size (max 5MB)
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    if (file.size > maxSize) {
+      return NextResponse.json(
+        { error: 'File too large. Maximum size is 5MB.', ok: false },
+        { status: 400 }
+      );
+    }
+
+    // Check if avatars bucket exists
+    const { data: buckets, error: bucketsError } = await supabase.storage.listBuckets();
+
+    if (bucketsError) {
+      console.error('Upload Photo API: Error checking buckets:', bucketsError);
+      return NextResponse.json(
+        { error: 'Storage not configured. Please set up avatars bucket in Supabase.', ok: false },
+        { status: 500 }
+      );
+    }
+
+    const avatarsBucket = buckets.find(b => b.name === 'avatars');
+
+    if (!avatarsBucket) {
+      return NextResponse.json(
+        { error: 'Avatars bucket does not exist. Please create it in Supabase Storage.', ok: false },
+        { status: 500 }
+      );
+    }
+
+    // Generate unique filename
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${user.id}-${Date.now()}.${fileExt}`;
+    const filePath = `profile-photos/${fileName}`;
+
+    // Convert File to ArrayBuffer for upload
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    // Upload to Supabase Storage
+    const { data: uploadData, error: uploadError } = await supabase
+      .storage
+      .from('avatars')
+      .upload(filePath, buffer, {
+        contentType: file.type,
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error('Upload Photo API: Error uploading file:', uploadError);
+      return NextResponse.json(
+        { error: 'Could not upload photo', details: uploadError.message, ok: false },
+        { status: 500 }
+      );
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase
+      .storage
+      .from('avatars')
+      .getPublicUrl(filePath);
+
+    const photoUrl = urlData.publicUrl;
+
+    // Check if profile exists
+    const { data: existingProfile } = await supabase
+      .from('user_profiles')
+      .select('id')
+      .eq('user_id', user.id)
+      .single();
+
+    if (!existingProfile) {
+      // Create profile with photo
+      const { error: createError } = await supabase
+        .from('user_profiles')
+        .insert({
+          user_id: user.id,
+          profile_photo_url: photoUrl,
+          full_name: user.email?.split('@')[0] || '',
+        });
+
+      if (createError) {
+        console.error('Upload Photo API: Error creating profile:', createError);
+        return NextResponse.json(
+          { error: 'Could not create profile', details: createError.message, ok: false },
+          { status: 500 }
+        );
+      }
+    } else {
+      // Update existing profile with new photo URL
+      const { error: updateError } = await supabase
+        .from('user_profiles')
+        .update({
+          profile_photo_url: photoUrl,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', user.id);
+
+      if (updateError) {
+        console.error('Upload Photo API: Error updating profile:', updateError);
+        return NextResponse.json(
+          { error: 'Could not update profile', details: updateError.message, ok: false },
+          { status: 500 }
+        );
+      }
+    }
+
+    // Log activity
+    await supabase
+      .from('profile_activity_log')
+      .insert({
+        user_id: user.id,
+        activity_type: 'photo_upload',
+        activity_details: { photo_url: photoUrl },
+      })
+      .then(() => {})
+      .catch(() => {}); // Ignore errors in activity log
+
+    return NextResponse.json({
+      ok: true,
+      photoUrl,
+      message: 'Profile photo uploaded successfully!',
+    });
+  } catch (error) {
+    console.error('Upload Photo API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error', ok: false },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE: Remove profile photo
+export async function DELETE() {
+  try {
+    const supabase = createRouteHandlerClient({ cookies });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized', ok: false }, { status: 401 });
+    }
+
+    // Get current photo URL
+    const { data: profile } = await supabase
+      .from('user_profiles')
+      .select('profile_photo_url')
+      .eq('user_id', user.id)
+      .single();
+
+    if (profile && profile.profile_photo_url) {
+      // Extract file path from URL
+      try {
+        const url = new URL(profile.profile_photo_url);
+        const pathParts = url.pathname.split('/');
+        const filePath = pathParts.slice(-2).join('/'); // Get "profile-photos/filename.ext"
+
+        // Delete from storage
+        await supabase
+          .storage
+          .from('avatars')
+          .remove([filePath]);
+      } catch (err) {
+        console.error('Error deleting file from storage:', err);
+        // Continue anyway to remove from database
+      }
+    }
+
+    // Update profile to remove photo URL
+    const { error: updateError } = await supabase
+      .from('user_profiles')
+      .update({
+        profile_photo_url: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', user.id);
+
+    if (updateError) {
+      console.error('Upload Photo API: Error removing photo:', updateError);
+      return NextResponse.json(
+        { error: 'Could not remove photo', details: updateError.message, ok: false },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      message: 'Profile photo removed successfully!',
+    });
+  } catch (error) {
+    console.error('Upload Photo API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error', ok: false },
+      { status: 500 }
+    );
+  }
+}

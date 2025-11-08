@@ -1,0 +1,83 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse } from 'next/server';
+
+export async function GET() {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Get user's saved vocabulary
+    const { data: userVocab } = await supabase
+      .from('user_vocabulary')
+      .select(`
+        word_id,
+        word,
+        word_of_the_day (
+          word,
+          definition,
+          part_of_speech,
+          synonyms
+        )
+      `)
+      .eq('user_id', user.id)
+      .order('saved_at', { ascending: false })
+      .limit(7);
+
+    if (!userVocab || userVocab.length < 5) {
+      return NextResponse.json(
+        { error: 'Not enough words to generate quiz' },
+        { status: 400 }
+      );
+    }
+
+    // Generate quiz questions
+    const questions = userVocab.slice(0, 5).map((vocab: any) => {
+      const wordData = vocab.word_of_the_day;
+
+      // Create multiple choice question
+      const correctAnswer = wordData.definition;
+
+      // Get wrong answers from other words
+      const wrongAnswers = userVocab
+        .filter((v: any) => v.word_id !== vocab.word_id)
+        .slice(0, 3)
+        .map((v: any) => v.word_of_the_day.definition);
+
+      // Shuffle options
+      const options = [correctAnswer, ...wrongAnswers].sort(() => Math.random() - 0.5);
+      const correctIndex = options.indexOf(correctAnswer);
+
+      return {
+        question: `What is the definition of the following word?`,
+        word: wordData.word,
+        options,
+        correctAnswer: correctIndex,
+      };
+    });
+
+    return NextResponse.json({
+      ok: true,
+      quiz: {
+        questions,
+        totalQuestions: questions.length,
+      },
+    });
+  } catch (error) {
+    console.error('Error generating quiz:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}

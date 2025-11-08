@@ -1,0 +1,214 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse } from 'next/server';
+
+export async function POST(request: Request) {
+  try {
+    const supabase = createRouteHandlerClient({ cookies });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { message, conversationHistory = [], includeContext = true } = body;
+
+    if (!message) {
+      return NextResponse.json(
+        { error: 'Message is required' },
+        { status: 400 }
+      );
+    }
+
+    console.log(`AI Chat: Processing message from user ${user.id}`);
+
+    let contextData = '';
+
+    // Fetch user learning context if requested
+    if (includeContext) {
+      try {
+        // Get recent recording feedback
+        const { data: recentRecordings } = await supabase
+          .from('recordings')
+          .select('topic, feedback, created_at')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(3);
+
+        // Get recent grammar quiz attempts
+        const { data: recentQuizzes } = await supabase
+          .from('grammar_quiz_attempts')
+          .select('score, total_questions, difficulty, created_at')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(3);
+
+        // Get recent challenge attempts
+        const { data: recentChallenges } = await supabase
+          .from('challenge_attempts')
+          .select('score, difficulty, created_at')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(3);
+
+        // Get user profile stats
+        const { data: profile } = await supabase
+          .from('user_profiles')
+          .select('total_xp, level, current_streak')
+          .eq('user_id', user.id)
+          .single();
+
+        // Build context string
+        const contextParts = [];
+
+        if (profile) {
+          contextParts.push(
+            `User's Learning Stats:\n- Level: ${profile.level || 1}\n- Total XP: ${profile.total_xp || 0}\n- Current Streak: ${profile.current_streak || 0} days`
+          );
+        }
+
+        if (recentRecordings && recentRecordings.length > 0) {
+          const recordingsSummary = recentRecordings
+            .map((r, i) => {
+              let feedback = '';
+              try {
+                const parsed = JSON.parse(r.feedback || '{}');
+                feedback = `Rating ${parsed.rating || 'N/A'}/10, Fluency ${parsed.scores?.fluency || 'N/A'}/10`;
+              } catch {
+                feedback = 'No detailed feedback';
+              }
+              return `  ${i + 1}. Topic: "${r.topic}" - ${feedback}`;
+            })
+            .join('\n');
+          contextParts.push(`Recent Speaking Sessions:\n${recordingsSummary}`);
+        }
+
+        if (recentQuizzes && recentQuizzes.length > 0) {
+          const quizzesSummary = recentQuizzes
+            .map(
+              (q, i) =>
+                `  ${i + 1}. ${q.difficulty} - Score: ${q.score}/${q.total_questions} (${Math.round((q.score / q.total_questions) * 100)}%)`
+            )
+            .join('\n');
+          contextParts.push(`Recent Grammar Quizzes:\n${quizzesSummary}`);
+        }
+
+        if (recentChallenges && recentChallenges.length > 0) {
+          const challengesSummary = recentChallenges
+            .map(
+              (c, i) =>
+                `  ${i + 1}. ${c.difficulty} - Score: ${c.score || 'N/A'}/10`
+            )
+            .join('\n');
+          contextParts.push(`Recent Daily Challenges:\n${challengesSummary}`);
+        }
+
+        if (contextParts.length > 0) {
+          contextData = '\n\n--- User Learning Context ---\n' + contextParts.join('\n\n');
+        }
+      } catch (error) {
+        console.error('AI Chat: Error fetching context data:', error);
+        // Continue without context if there's an error
+      }
+    }
+
+    // Build system prompt
+    const systemPrompt = `You are Orato's AI English Learning Mentor. You are a friendly, encouraging, and knowledgeable English teacher who helps users improve their speaking, grammar, vocabulary, and overall English fluency.
+
+Your role:
+- Answer questions about English grammar, vocabulary, pronunciation, and usage
+- Provide corrections and explanations for user sentences
+- Suggest speaking topics and practice exercises
+- Give personalized learning advice based on user's performance
+- Encourage and motivate learners
+- Keep responses concise and clear (2-4 sentences unless more detail is requested)
+
+Guidelines:
+- Be warm and encouraging, never condescending
+- Explain grammar rules simply with examples
+- Correct mistakes gently and constructively
+- Celebrate user progress and improvements
+- Adapt your language level to the user's proficiency
+- Use emojis sparingly for warmth (1-2 per response max)
+
+When correcting sentences:
+- Show the original sentence
+- Provide the corrected version
+- Explain why the correction is needed
+- Give a related grammar tip${contextData ? '\n\nUser Context:\n' + contextData : ''}`;
+
+    // Build messages array for OpenRouter
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...conversationHistory,
+      { role: 'user', content: message },
+    ];
+
+    console.log('AI Chat: Sending request to OpenRouter...');
+
+    // Call OpenRouter API
+    const openRouterResponse = await fetch(
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'deepseek/deepseek-r1',
+          messages: messages,
+          temperature: 0.7,
+          max_tokens: 500,
+        }),
+      }
+    );
+
+    if (!openRouterResponse.ok) {
+      const errorText = await openRouterResponse.text();
+      console.error('AI Chat: OpenRouter API error:', errorText);
+      throw new Error(`OpenRouter API error: ${openRouterResponse.status}`);
+    }
+
+    const aiResponse = await openRouterResponse.json();
+    const assistantMessage =
+      aiResponse.choices?.[0]?.message?.content ||
+      "I'm having trouble responding right now. Please try again!";
+
+    console.log('AI Chat: Response generated successfully');
+
+    // Save conversation to database
+    try {
+      await supabase.from('ai_chat_history').insert({
+        user_id: user.id,
+        user_message: message,
+        assistant_message: assistantMessage,
+        included_context: includeContext,
+      });
+    } catch (error) {
+      console.error('AI Chat: Error saving conversation:', error);
+      // Don't fail the request if saving fails
+    }
+
+    return NextResponse.json({
+      ok: true,
+      message: assistantMessage,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('AI Chat: Unexpected error:', error);
+    return NextResponse.json(
+      {
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : 'Unknown error',
+      },
+      { status: 500 }
+    );
+  }
+}

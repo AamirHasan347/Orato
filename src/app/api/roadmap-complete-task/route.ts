@@ -1,0 +1,121 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse, NextRequest } from 'next/server';
+
+export async function POST(request: NextRequest) {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { taskId, dayNumber, roadmapId } = body;
+
+    if (!taskId && !dayNumber) {
+      return NextResponse.json(
+        { error: 'Missing taskId or dayNumber' },
+        { status: 400 }
+      );
+    }
+
+    // Find the task
+    let query = supabase
+      .from('roadmap_days')
+      .select('*')
+      .eq('user_id', user.id);
+
+    if (taskId) {
+      query = query.eq('id', taskId);
+    } else if (dayNumber && roadmapId) {
+      query = query.eq('roadmap_id', roadmapId).eq('day_number', dayNumber);
+    }
+
+    const { data: task, error: taskError } = await query.single();
+
+    if (taskError || !task) {
+      console.error('Complete Task API: Task not found:', taskError);
+      return NextResponse.json(
+        { error: 'Task not found' },
+        { status: 404 }
+      );
+    }
+
+    // Mark task as completed
+    const { data: updatedTask, error: updateError } = await supabase
+      .from('roadmap_days')
+      .update({
+        completed: true,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', task.id)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error('Complete Task API: Error updating task:', updateError);
+      return NextResponse.json(
+        { error: 'Could not complete task', details: updateError.message },
+        { status: 500 }
+      );
+    }
+
+    // Fetch updated roadmap with progress
+    const { data: roadmap } = await supabase
+      .from('roadmaps')
+      .select('*')
+      .eq('id', task.roadmap_id)
+      .single();
+
+    // Check for newly reached milestones
+    const { data: newMilestones } = await supabase
+      .from('roadmap_milestones')
+      .select('*')
+      .eq('roadmap_id', task.roadmap_id)
+      .eq('reached', true)
+      .eq('celebration_shown', false);
+
+    // Award XP if task has XP reward
+    if (task.xp_reward && task.xp_reward > 0) {
+      try {
+        await fetch(`${request.nextUrl.origin}/api/add-xp`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            cookie: request.headers.get('cookie') || '',
+          },
+          body: JSON.stringify({
+            xpAmount: task.xp_reward,
+            activityType: 'session',
+          }),
+        });
+      } catch (error) {
+        console.error('Complete Task API: Error awarding XP:', error);
+        // Don't fail the request if XP award fails
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      task: updatedTask,
+      roadmap,
+      newMilestones: newMilestones || [],
+      message: 'Task completed successfully!',
+      xpAwarded: task.xp_reward || 0,
+    });
+  } catch (error) {
+    console.error('Complete Task API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}

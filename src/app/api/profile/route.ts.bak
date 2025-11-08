@@ -1,0 +1,206 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse, NextRequest } from 'next/server';
+
+// GET: Fetch user profile
+export async function GET() {
+  try {
+    const supabase = createRouteHandlerClient({ cookies });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized', ok: false }, { status: 401 });
+    }
+
+    // Fetch profile - create if doesn't exist
+    let { data: profile, error: profileError } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .eq('user_id', user.id)
+      .single();
+
+    if (profileError && profileError.code === 'PGRST116') {
+      // Profile doesn't exist, create it
+      const { data: newProfile, error: createError } = await supabase
+        .from('user_profiles')
+        .insert({
+          user_id: user.id,
+          full_name: user.email?.split('@')[0] || '',
+          display_name: user.email?.split('@')[0] || '',
+        })
+        .select()
+        .single();
+
+      if (createError) {
+        console.error('Profile API: Error creating profile:', createError);
+        return NextResponse.json(
+          { error: 'Could not create profile. Please ensure database tables are set up.', details: createError.message, ok: false },
+          { status: 500 }
+        );
+      }
+      profile = newProfile;
+    } else if (profileError) {
+      console.error('Profile API: Error fetching profile:', profileError);
+      return NextResponse.json(
+        { error: 'Could not fetch profile. Database tables may not be set up.', details: profileError.message, ok: false },
+        { status: 500 }
+      );
+    }
+
+    // Fetch preferences - create if doesn't exist
+    let { data: preferences, error: prefError } = await supabase
+      .from('user_preferences')
+      .select('*')
+      .eq('user_id', user.id)
+      .single();
+
+    if (prefError && prefError.code === 'PGRST116') {
+      // Preferences don't exist, create them
+      const { data: newPreferences, error: createPrefError } = await supabase
+        .from('user_preferences')
+        .insert({
+          user_id: user.id,
+        })
+        .select()
+        .single();
+
+      if (createPrefError) {
+        console.error('Profile API: Error creating preferences:', createPrefError);
+      } else {
+        preferences = newPreferences;
+      }
+    }
+
+    // Fetch current CEFR level - optional, may not exist
+    const { data: cefrLevel } = await supabase
+      .from('cefr_levels')
+      .select(`
+        *,
+        cefr_descriptions (*)
+      `)
+      .eq('user_id', user.id)
+      .eq('is_current', true)
+      .single();
+
+    return NextResponse.json({
+      ok: true,
+      profile: profile || null,
+      preferences: preferences || null,
+      cefrLevel: cefrLevel || null,
+      user: {
+        id: user.id,
+        email: user.email,
+      },
+    });
+  } catch (error) {
+    console.error('Profile API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error', ok: false },
+      { status: 500 }
+    );
+  }
+}
+
+// PUT: Update user profile
+export async function PUT(request: NextRequest) {
+  try {
+    const supabase = createRouteHandlerClient({ cookies });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized', ok: false }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const {
+      full_name,
+      display_name,
+      bio,
+      date_of_birth,
+      country,
+      native_language,
+    } = body;
+
+    // Check if profile exists first
+    const { data: existingProfile } = await supabase
+      .from('user_profiles')
+      .select('id')
+      .eq('user_id', user.id)
+      .single();
+
+    let updatedProfile;
+
+    if (!existingProfile) {
+      // Create profile if it doesn't exist
+      const { data: newProfile, error: createError } = await supabase
+        .from('user_profiles')
+        .insert({
+          user_id: user.id,
+          full_name,
+          display_name,
+          bio,
+          date_of_birth,
+          country,
+          native_language,
+        })
+        .select()
+        .single();
+
+      if (createError) {
+        console.error('Profile API: Error creating profile:', createError);
+        return NextResponse.json(
+          { error: 'Could not create profile', details: createError.message, ok: false },
+          { status: 500 }
+        );
+      }
+      updatedProfile = newProfile;
+    } else {
+      // Update existing profile
+      const { data, error: updateError } = await supabase
+        .from('user_profiles')
+        .update({
+          full_name,
+          display_name,
+          bio,
+          date_of_birth,
+          country,
+          native_language,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', user.id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('Profile API: Error updating profile:', updateError);
+        return NextResponse.json(
+          { error: 'Could not update profile', details: updateError.message, ok: false },
+          { status: 500 }
+        );
+      }
+      updatedProfile = data;
+    }
+
+    return NextResponse.json({
+      ok: true,
+      profile: updatedProfile,
+      message: 'Profile updated successfully!',
+    });
+  } catch (error) {
+    console.error('Profile API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error', ok: false },
+      { status: 500 }
+    );
+  }
+}

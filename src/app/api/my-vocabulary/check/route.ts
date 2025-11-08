@@ -1,0 +1,45 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse } from 'next/server';
+
+export async function GET(request: Request) {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+    const { searchParams } = new URL(request.url);
+    const wordId = searchParams.get('wordId');
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    if (!wordId) {
+      return NextResponse.json({ error: 'Word ID is required' }, { status: 400 });
+    }
+
+    // Check if word is already saved
+    const { data, error } = await supabase
+      .from('user_vocabulary')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('word_id', wordId)
+      .single();
+
+    return NextResponse.json({
+      ok: true,
+      isSaved: !!data && !error,
+    });
+  } catch (error) {
+    console.error('Error checking vocabulary:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}

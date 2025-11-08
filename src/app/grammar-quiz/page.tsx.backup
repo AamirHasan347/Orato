@@ -1,0 +1,481 @@
+"use client";
+
+import { useEffect, useState, useRef } from "react";
+import { useSupabase } from "../supabase-provider";
+import { useRouter } from "next/navigation";
+
+interface QuizQuestion {
+  id: string;
+  question_text: string;
+  question_type: string;
+  difficulty: string;
+  category: string;
+  options: {
+    A: string;
+    B: string;
+    C: string;
+    D: string;
+  };
+}
+
+interface UserAnswer {
+  question_id: string;
+  user_answer: string;
+  time_taken: number;
+}
+
+interface GradedAnswer {
+  question_id: string;
+  user_answer: string;
+  correct_answer: string;
+  is_correct: boolean;
+  explanation: string;
+  time_taken: number;
+}
+
+export default function GrammarQuizPage() {
+  const { user, loading: authLoading } = useSupabase();
+  const router = useRouter();
+
+  const [difficulty, setDifficulty] = useState<"easy" | "medium" | "hard">("easy");
+  const [showDifficultySelect, setShowDifficultySelect] = useState(true);
+  const [questions, setQuestions] = useState<QuizQuestion[]>([]);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [userAnswers, setUserAnswers] = useState<UserAnswer[]>([]);
+  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const [results, setResults] = useState<any>(null);
+  const [timeLeft, setTimeLeft] = useState(180); // 3 minutes total
+  const [questionStartTime, setQuestionStartTime] = useState(Date.now());
+  const [quizStartTime, setQuizStartTime] = useState(0);
+
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      router.push("/login");
+    }
+  }, [user, authLoading, router]);
+
+  useEffect(() => {
+    if (questions.length > 0 && !showResults) {
+      // Start timer
+      timerRef.current = setInterval(() => {
+        setTimeLeft((prev) => {
+          if (prev <= 1) {
+            handleSubmitQuiz();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      return () => {
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+        }
+      };
+    }
+  }, [questions, showResults]);
+
+  const startQuiz = async (selectedDifficulty: "easy" | "medium" | "hard") => {
+    setLoading(true);
+    setDifficulty(selectedDifficulty);
+
+    try {
+      const response = await fetch(`/api/grammar-quiz?difficulty=${selectedDifficulty}&limit=5`);
+      const data = await response.json();
+
+      if (data.ok) {
+        setQuestions(data.questions);
+        setShowDifficultySelect(false);
+        setQuizStartTime(Date.now());
+        setQuestionStartTime(Date.now());
+        setTimeLeft(180);
+      } else {
+        alert(data.error || "Failed to load quiz questions");
+      }
+    } catch (error) {
+      console.error("Error loading quiz:", error);
+      alert("Could not load quiz. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelectAnswer = (option: string) => {
+    setSelectedAnswer(option);
+  };
+
+  const handleNext = () => {
+    if (!selectedAnswer) {
+      alert("Please select an answer before proceeding.");
+      return;
+    }
+
+    // Calculate time taken for this question
+    const timeTaken = Math.round((Date.now() - questionStartTime) / 1000);
+
+    // Save answer
+    const answer: UserAnswer = {
+      question_id: questions[currentQuestionIndex].id,
+      user_answer: selectedAnswer,
+      time_taken: timeTaken,
+    };
+
+    setUserAnswers([...userAnswers, answer]);
+    setSelectedAnswer(null);
+
+    // Move to next question or submit
+    if (currentQuestionIndex < questions.length - 1) {
+      setCurrentQuestionIndex(currentQuestionIndex + 1);
+      setQuestionStartTime(Date.now());
+    } else {
+      // Last question, submit quiz
+      handleSubmitQuiz([...userAnswers, answer]);
+    }
+  };
+
+  const handlePrevious = () => {
+    if (currentQuestionIndex > 0) {
+      setCurrentQuestionIndex(currentQuestionIndex - 1);
+      // Restore previously selected answer
+      const prevAnswer = userAnswers[currentQuestionIndex - 1];
+      if (prevAnswer) {
+        setSelectedAnswer(prevAnswer.user_answer);
+      }
+    }
+  };
+
+  const handleSubmitQuiz = async (answers: UserAnswer[] = userAnswers) => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+
+    setLoading(true);
+
+    const totalTimeTaken = Math.round((Date.now() - quizStartTime) / 1000);
+
+    try {
+      const response = await fetch("/api/grammar-quiz/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          answers: answers,
+          time_taken: totalTimeTaken,
+          difficulty: difficulty,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.ok) {
+        setResults(data);
+        setShowResults(true);
+      } else {
+        alert(data.error || "Failed to submit quiz");
+      }
+    } catch (error) {
+      console.error("Error submitting quiz:", error);
+      alert("Could not submit quiz. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRetryQuiz = () => {
+    setShowResults(false);
+    setShowDifficultySelect(true);
+    setQuestions([]);
+    setCurrentQuestionIndex(0);
+    setUserAnswers([]);
+    setSelectedAnswer(null);
+    setResults(null);
+    setTimeLeft(180);
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  if (authLoading || loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-400 via-blue-500 to-blue-600 flex items-center justify-center">
+        <div className="text-white text-xl">Loading...</div>
+      </div>
+    );
+  }
+
+  // Difficulty Selection Screen
+  if (showDifficultySelect) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-400 via-blue-500 to-blue-600 p-4 flex items-center justify-center">
+        <div className="w-full max-w-2xl">
+          <div className="bg-white rounded-3xl shadow-2xl p-8 md:p-12">
+            <button
+              onClick={() => router.push("/")}
+              className="mb-6 flex items-center text-gray-600 hover:text-gray-900 transition"
+            >
+              ← Back to Dashboard
+            </button>
+
+            <div className="text-center mb-8">
+              <div className="text-6xl mb-4">🧩</div>
+              <h1 className="text-4xl font-bold text-gray-900 mb-2">Grammar Quiz</h1>
+              <p className="text-gray-600 text-lg">Test your grammar skills today!</p>
+            </div>
+
+            <div className="mb-8">
+              <h2 className="text-xl font-semibold text-gray-800 mb-4 text-center">
+                Choose your difficulty level:
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <button
+                  onClick={() => startQuiz("easy")}
+                  className="p-6 bg-green-100 hover:bg-green-200 rounded-xl border-2 border-green-300 hover:border-green-400 transition-all duration-200 transform hover:scale-105"
+                >
+                  <div className="text-3xl mb-2">😊</div>
+                  <div className="font-bold text-green-700 text-lg">Easy</div>
+                  <div className="text-green-600 text-sm">Basic grammar rules</div>
+                </button>
+
+                <button
+                  onClick={() => startQuiz("medium")}
+                  className="p-6 bg-yellow-100 hover:bg-yellow-200 rounded-xl border-2 border-yellow-300 hover:border-yellow-400 transition-all duration-200 transform hover:scale-105"
+                >
+                  <div className="text-3xl mb-2">🤔</div>
+                  <div className="font-bold text-yellow-700 text-lg">Medium</div>
+                  <div className="text-yellow-600 text-sm">Intermediate rules</div>
+                </button>
+
+                <button
+                  onClick={() => startQuiz("hard")}
+                  className="p-6 bg-red-100 hover:bg-red-200 rounded-xl border-2 border-red-300 hover:border-red-400 transition-all duration-200 transform hover:scale-105"
+                >
+                  <div className="text-3xl mb-2">🔥</div>
+                  <div className="font-bold text-red-700 text-lg">Hard</div>
+                  <div className="text-red-600 text-sm">Advanced grammar</div>
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-blue-50 rounded-xl p-6 border border-blue-200">
+              <h3 className="font-semibold text-blue-900 mb-2">Quiz Format:</h3>
+              <ul className="text-blue-800 space-y-1 text-sm">
+                <li>• 5 multiple choice questions</li>
+                <li>• 3 minutes total time</li>
+                <li>• Instant feedback with explanations</li>
+                <li>• Track your progress over time</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Results Screen
+  if (showResults && results) {
+    const percentage = results.percentage;
+    const passed = percentage >= 60;
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-400 via-blue-500 to-blue-600 p-4">
+        <div className="max-w-4xl mx-auto py-8">
+          <div className="bg-white rounded-3xl shadow-2xl p-6 md:p-10">
+            {/* Score Display */}
+            <div className="text-center mb-8">
+              <div className="text-7xl mb-4">{passed ? "🎉" : "📚"}</div>
+              <h2 className="text-4xl font-bold text-gray-900 mb-2">Quiz Complete!</h2>
+              <div className="text-6xl font-bold my-6" style={{ color: passed ? "#10b981" : "#f59e0b" }}>
+                {results.score}/{results.total}
+              </div>
+              <p className="text-2xl text-gray-700">
+                You scored <span className="font-bold">{percentage}%</span>
+              </p>
+              <p className="text-gray-600 mt-2">
+                {passed ? "Great job! Keep up the good work! 🌟" : "Keep practicing! You'll do better next time! 💪"}
+              </p>
+            </div>
+
+            {/* Answer Review */}
+            <div className="space-y-4 mb-8">
+              <h3 className="text-2xl font-bold text-gray-900 mb-4">Review Your Answers:</h3>
+              {results.answers.map((answer: GradedAnswer, index: number) => {
+                const question = questions.find((q) => q.id === answer.question_id);
+                if (!question) return null;
+
+                return (
+                  <div
+                    key={index}
+                    className={`p-6 rounded-xl border-2 ${
+                      answer.is_correct
+                        ? "bg-green-50 border-green-300"
+                        : "bg-red-50 border-red-300"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className="text-2xl">{answer.is_correct ? "✅" : "❌"}</div>
+                      <div className="flex-1">
+                        <p className="font-semibold text-gray-900 mb-2">
+                          Question {index + 1}: {question.question_text}
+                        </p>
+                        <div className="space-y-1 text-sm">
+                          <p>
+                            <span className="font-medium">Your answer:</span>{" "}
+                            <span className={answer.is_correct ? "text-green-700" : "text-red-700"}>
+                              {answer.user_answer}. {question.options[answer.user_answer as keyof typeof question.options]}
+                            </span>
+                          </p>
+                          {!answer.is_correct && (
+                            <p>
+                              <span className="font-medium">Correct answer:</span>{" "}
+                              <span className="text-green-700">
+                                {answer.correct_answer}. {question.options[answer.correct_answer as keyof typeof question.options]}
+                              </span>
+                            </p>
+                          )}
+                        </div>
+                        <div className="mt-3 p-3 bg-white rounded-lg">
+                          <p className="text-sm text-gray-700">
+                            <span className="font-medium">Explanation:</span> {answer.explanation}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              <button
+                onClick={handleRetryQuiz}
+                className="px-8 py-4 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl font-semibold hover:from-blue-600 hover:to-blue-700 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                Try Again
+              </button>
+              <button
+                onClick={() => router.push("/")}
+                className="px-8 py-4 bg-gray-200 text-gray-700 rounded-xl font-semibold hover:bg-gray-300 transition-all duration-200"
+              >
+                Back to Dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Quiz Screen
+  const currentQuestion = questions[currentQuestionIndex];
+  const progress = ((currentQuestionIndex + 1) / questions.length) * 100;
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-400 via-blue-500 to-blue-600 p-4">
+      <div className="max-w-4xl mx-auto py-4 md:py-8">
+        <div className="bg-white bg-opacity-95 backdrop-blur-sm rounded-3xl shadow-2xl overflow-hidden">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-blue-500 to-blue-600 px-6 py-4 flex items-center justify-between text-white">
+            <button
+              onClick={() => router.push("/")}
+              className="w-12 h-12 flex items-center justify-center rounded-full bg-white bg-opacity-20 hover:bg-opacity-30 transition"
+            >
+              ←
+            </button>
+            <h1 className="text-xl md:text-2xl font-bold">Grammar Quiz</h1>
+            <div className="w-12 h-12 flex items-center justify-center rounded-full bg-yellow-400 text-yellow-900 font-bold">
+              {formatTime(timeLeft)}
+            </div>
+          </div>
+
+          {/* Progress */}
+          <div className="px-6 py-4 bg-gray-50">
+            <div className="flex items-center justify-between mb-2 text-sm text-gray-600">
+              <span className="font-medium">Question {currentQuestionIndex + 1}</span>
+              <span>{currentQuestionIndex + 1} of {questions.length}</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div
+                className="bg-gradient-to-r from-blue-500 to-blue-600 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              ></div>
+            </div>
+          </div>
+
+          {/* Question */}
+          <div className="px-6 py-8 md:px-10 md:py-12">
+            <div className="mb-8">
+              <div className="inline-block px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium mb-4">
+                {currentQuestion.category}
+              </div>
+              <h2 className="text-2xl md:text-3xl font-bold text-gray-900 leading-relaxed">
+                {currentQuestion.question_text}
+              </h2>
+            </div>
+
+            {/* Options */}
+            <div className="mb-8">
+              <p className="text-gray-600 mb-4 font-medium">Choose your answer:</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {Object.entries(currentQuestion.options).map(([key, value]) => (
+                  <button
+                    key={key}
+                    onClick={() => handleSelectAnswer(key)}
+                    className={`p-5 rounded-2xl text-left transition-all duration-200 transform hover:scale-105 ${
+                      selectedAnswer === key
+                        ? "bg-blue-500 text-white border-2 border-blue-600 shadow-lg"
+                        : "bg-white text-gray-800 border-2 border-gray-200 hover:border-blue-300 hover:shadow-md"
+                    }`}
+                  >
+                    <span className="font-bold text-lg">{key}.</span> {value}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Navigation */}
+            <div className="flex items-center justify-between gap-4">
+              <button
+                onClick={handlePrevious}
+                disabled={currentQuestionIndex === 0}
+                className={`px-6 py-3 rounded-xl font-semibold transition ${
+                  currentQuestionIndex === 0
+                    ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                    : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                }`}
+              >
+                ← Previous
+              </button>
+
+              <div className="flex items-center gap-2 text-blue-600">
+                <span className="text-2xl">💡</span>
+                <span className="font-medium text-sm hidden sm:inline">
+                  {currentQuestionIndex + 1}/{questions.length}
+                </span>
+              </div>
+
+              <button
+                onClick={handleNext}
+                disabled={!selectedAnswer}
+                className={`px-6 py-3 rounded-xl font-semibold transition ${
+                  !selectedAnswer
+                    ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                    : "bg-gradient-to-r from-blue-500 to-blue-600 text-white hover:from-blue-600 hover:to-blue-700 shadow-lg"
+                }`}
+              >
+                {currentQuestionIndex === questions.length - 1 ? "Submit" : "Next"} →
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

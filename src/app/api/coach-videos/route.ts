@@ -1,0 +1,74 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse, NextRequest } from 'next/server';
+
+export async function GET(request: NextRequest) {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const currentVideoId = searchParams.get('currentVideoId');
+
+    // Fetch all videos ordered by order_index
+    const { data: videos, error: videosError } = await supabase
+      .from('coach_videos')
+      .select('*')
+      .order('order_index', { ascending: true });
+
+    if (videosError) {
+      console.error('Coach Videos API: Error fetching videos:', videosError);
+      return NextResponse.json(
+        { error: 'Could not fetch videos', details: videosError.message },
+        { status: 500 }
+      );
+    }
+
+    if (!videos || videos.length === 0) {
+      return NextResponse.json(
+        { error: 'No videos available' },
+        { status: 404 }
+      );
+    }
+
+    // If currentVideoId is provided, calculate next/previous
+    let response: any = { ok: true, videos };
+
+    if (currentVideoId) {
+      const currentIndex = videos.findIndex(v => v.video_id === currentVideoId);
+
+      if (currentIndex !== -1) {
+        const nextVideo = currentIndex < videos.length - 1 ? videos[currentIndex + 1] : null;
+        const previousVideo = currentIndex > 0 ? videos[currentIndex - 1] : null;
+        const currentVideo = videos[currentIndex];
+
+        response = {
+          ok: true,
+          currentVideo,
+          nextVideo,
+          previousVideo,
+          totalVideos: videos.length,
+          currentIndex: currentIndex + 1, // 1-based for display
+        };
+      }
+    }
+
+    return NextResponse.json(response);
+  } catch (error) {
+    console.error('Coach Videos API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}

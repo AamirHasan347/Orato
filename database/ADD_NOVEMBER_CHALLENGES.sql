@@ -1,0 +1,77 @@
+-- Daily Challenges for November 2025 and beyond
+-- Run this in your Supabase SQL Editor
+
+INSERT INTO daily_challenges (date, prompt, difficulty) VALUES
+  -- November 2025
+  ('2025-11-03', 'Describe your favorite movie and why it resonates with you.', 'easy'),
+  ('2025-11-04', 'Tell me about a time you overcame a significant challenge.', 'medium'),
+  ('2025-11-05', 'Explain a complex topic you''re passionate about to a beginner.', 'hard'),
+  ('2025-11-06', 'Describe your ideal weekend day in detail.', 'easy'),
+  ('2025-11-07', 'Share a childhood memory that shaped who you are today.', 'medium'),
+  ('2025-11-08', 'Discuss the pros and cons of remote work.', 'medium'),
+  ('2025-11-09', 'Describe a person who has had a significant impact on your life.', 'easy'),
+  ('2025-11-10', 'Explain how technology has changed your daily routine.', 'medium'),
+  ('2025-11-11', 'Tell a funny story from your past.', 'easy'),
+  ('2025-11-12', 'Discuss a controversial topic and present both sides.', 'hard'),
+  ('2025-11-13', 'Describe your dream vacation destination.', 'easy'),
+  ('2025-11-14', 'Talk about a skill you would like to learn and why.', 'medium'),
+  ('2025-11-15', 'Explain your morning routine and how it affects your day.', 'easy'),
+  ('2025-11-16', 'Discuss the importance of work-life balance.', 'medium'),
+  ('2025-11-17', 'Describe a book that changed your perspective on life.', 'medium'),
+  ('2025-11-18', 'Talk about your favorite hobby and what you love about it.', 'easy'),
+  ('2025-11-19', 'Explain a historical event and its significance.', 'hard'),
+  ('2025-11-20', 'Describe what success means to you.', 'medium'),
+  ('2025-11-21', 'Tell me about your favorite season and why.', 'easy'),
+  ('2025-11-22', 'Discuss how social media has influenced modern communication.', 'hard'),
+  ('2025-11-23', 'Describe a tradition that is important to you or your family.', 'easy'),
+  ('2025-11-24', 'Explain how you handle stress and maintain mental health.', 'medium'),
+  ('2025-11-25', 'Talk about a place that holds special meaning to you.', 'easy'),
+  ('2025-11-26', 'Discuss the role of education in personal development.', 'hard'),
+  ('2025-11-27', 'Describe your perfect day from morning to night.', 'easy'),
+  ('2025-11-28', 'Explain a life lesson you learned the hard way.', 'medium'),
+  ('2025-11-29', 'Talk about your favorite childhood game or activity.', 'easy'),
+  ('2025-11-30', 'Discuss the impact of artificial intelligence on society.', 'hard'),
+
+  -- December 2025
+  ('2025-12-01', 'Describe a goal you have for the next year.', 'medium'),
+  ('2025-12-02', 'Talk about a time when you had to adapt to change.', 'medium'),
+  ('2025-12-03', 'Explain your approach to learning new things.', 'easy'),
+  ('2025-12-04', 'Discuss the importance of friendship in your life.', 'easy'),
+  ('2025-12-05', 'Describe a risk you took that paid off.', 'medium'),
+  ('2025-12-06', 'Talk about your favorite form of entertainment.', 'easy'),
+  ('2025-12-07', 'Explain how you make important decisions.', 'medium'),
+  ('2025-12-08', 'Describe a cultural experience that broadened your perspective.', 'hard'),
+  ('2025-12-09', 'Talk about your relationship with nature or the outdoors.', 'easy'),
+  ('2025-12-10', 'Discuss the value of teamwork versus individual work.', 'medium'),
+  ('2025-12-11', 'Describe your favorite food and why you love it.', 'easy'),
+  ('2025-12-12', 'Explain how you balance multiple responsibilities.', 'medium'),
+  ('2025-12-13', 'Talk about a piece of advice that changed your life.', 'medium'),
+  ('2025-12-14', 'Discuss the role of creativity in problem-solving.', 'hard'),
+  ('2025-12-15', 'Describe a personal achievement you''re proud of.', 'easy'),
+  ('2025-12-16', 'Talk about how you stay motivated during difficult times.', 'medium'),
+  ('2025-12-17', 'Explain your views on sustainable living.', 'hard'),
+  ('2025-12-18', 'Describe your favorite way to spend free time.', 'easy'),
+  ('2025-12-19', 'Discuss the importance of continuous learning.', 'medium'),
+  ('2025-12-20', 'Talk about a leader or role model who inspires you.', 'medium'),
+  ('2025-12-21', 'Describe a challenge you''re currently working to overcome.', 'medium'),
+  ('2025-12-22', 'Explain what home means to you.', 'easy'),
+  ('2025-12-23', 'Discuss the benefits and drawbacks of technology in daily life.', 'hard'),
+  ('2025-12-24', 'Describe a meaningful gift you''ve given or received.', 'easy'),
+  ('2025-12-25', 'Talk about a value or principle you live by.', 'medium'),
+  ('2025-12-26', 'Explain how you define happiness.', 'easy'),
+  ('2025-12-27', 'Discuss the importance of health and wellness.', 'medium'),
+  ('2025-12-28', 'Describe your favorite way to celebrate special occasions.', 'easy'),
+  ('2025-12-29', 'Talk about a time when you learned from failure.', 'medium'),
+  ('2025-12-30', 'Explain your vision for your future self.', 'medium'),
+  ('2025-12-31', 'Reflect on the most important lesson you learned this year.', 'medium'),
+
+  -- January 2026
+  ('2026-01-01', 'Describe your New Year''s resolutions and why they matter.', 'easy'),
+  ('2026-01-02', 'Talk about how you plan to grow personally this year.', 'medium'),
+  ('2026-01-03', 'Explain what makes a good conversation.', 'medium'),
+  ('2026-01-04', 'Discuss the importance of maintaining old friendships.', 'easy'),
+  ('2026-01-05', 'Describe a habit you want to develop or break.', 'medium');
+
+-- Verify the challenges were added
+SELECT COUNT(*) as total_challenges FROM daily_challenges;
+SELECT MIN(date) as earliest, MAX(date) as latest FROM daily_challenges;

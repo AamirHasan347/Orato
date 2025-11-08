@@ -1,0 +1,101 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse } from 'next/server';
+
+export async function GET() {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Fetch user's active roadmap
+    const { data: roadmap, error: roadmapError } = await supabase
+      .from('roadmaps')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (roadmapError && roadmapError.code !== 'PGRST116') {
+      console.error('Roadmap API: Error fetching roadmap:', roadmapError);
+      return NextResponse.json(
+        { error: 'Could not fetch roadmap', details: roadmapError.message },
+        { status: 500 }
+      );
+    }
+
+    // If no roadmap exists, return null
+    if (!roadmap) {
+      return NextResponse.json({
+        ok: true,
+        roadmap: null,
+        message: 'No active roadmap found',
+      });
+    }
+
+    // Fetch roadmap days
+    const { data: days, error: daysError } = await supabase
+      .from('roadmap_days')
+      .select('*')
+      .eq('roadmap_id', roadmap.id)
+      .order('day_number', { ascending: true });
+
+    if (daysError) {
+      console.error('Roadmap API: Error fetching days:', daysError);
+      return NextResponse.json(
+        { error: 'Could not fetch roadmap days', details: daysError.message },
+        { status: 500 }
+      );
+    }
+
+    // Fetch milestones
+    const { data: milestones, error: milestonesError } = await supabase
+      .from('roadmap_milestones')
+      .select('*')
+      .eq('roadmap_id', roadmap.id)
+      .order('milestone_day', { ascending: true });
+
+    if (milestonesError) {
+      console.error('Roadmap API: Error fetching milestones:', milestonesError);
+    }
+
+    // Calculate today's task
+    const today = new Date();
+    const startDate = new Date(roadmap.start_date);
+    const daysSinceStart = Math.floor((today.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+    const currentDayNumber = Math.min(Math.max(daysSinceStart + 1, 1), 30);
+
+    const todayTask = days.find(d => d.day_number === currentDayNumber);
+    const upcomingTasks = days.filter(d => d.day_number > currentDayNumber && !d.completed).slice(0, 3);
+
+    return NextResponse.json({
+      ok: true,
+      roadmap: {
+        ...roadmap,
+        days,
+        milestones: milestones || [],
+        today_task: todayTask,
+        upcoming_tasks: upcomingTasks,
+        days_since_start: daysSinceStart,
+        current_day_number: currentDayNumber,
+      },
+    });
+  } catch (error) {
+    console.error('Roadmap API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}

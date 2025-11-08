@@ -1,0 +1,150 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse, NextRequest } from 'next/server';
+
+// GET: Fetch user's achievements
+export async function GET() {
+  try {
+    const supabase = createRouteHandlerClient({ cookies });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Fetch all achievements
+    const { data: allAchievements, error: allError } = await supabase
+      .from('achievements')
+      .select('*')
+      .eq('is_active', true)
+      .order('category', { ascending: true })
+      .order('requirement_value', { ascending: true });
+
+    if (allError) {
+      console.error('User Achievements API: Error fetching achievements:', allError);
+      return NextResponse.json(
+        { error: 'Could not fetch achievements', details: allError.message },
+        { status: 500 }
+      );
+    }
+
+    // Fetch user's unlocked achievements
+    const { data: unlockedAchievements, error: unlockedError } = await supabase
+      .from('user_achievements')
+      .select('achievement_id, unlocked_at, is_new')
+      .eq('user_id', user.id);
+
+    if (unlockedError) {
+      console.error('User Achievements API: Error fetching unlocked achievements:', unlockedError);
+      return NextResponse.json(
+        { error: 'Could not fetch unlocked achievements', details: unlockedError.message },
+        { status: 500 }
+      );
+    }
+
+    // Combine achievements with unlock status
+    const unlockedMap = new Map(
+      unlockedAchievements.map((ua) => [ua.achievement_id, { unlocked_at: ua.unlocked_at, is_new: ua.is_new }])
+    );
+
+    const achievements = allAchievements.map((achievement) => {
+      const unlockData = unlockedMap.get(achievement.id);
+      return {
+        ...achievement,
+        is_unlocked: !!unlockData,
+        unlocked_at: unlockData?.unlocked_at || null,
+        is_new: unlockData?.is_new || false,
+      };
+    });
+
+    // Group by category
+    const categories = ['streak', 'fluency', 'practice', 'vocabulary', 'level', 'special', 'social'];
+    const groupedAchievements = categories.reduce((acc, category) => {
+      acc[category] = achievements.filter((a) => a.category === category);
+      return acc;
+    }, {} as Record<string, typeof achievements>);
+
+    // Calculate statistics
+    const totalAchievements = achievements.length;
+    const unlockedCount = achievements.filter((a) => a.is_unlocked).length;
+    const newCount = achievements.filter((a) => a.is_new).length;
+    const completionPercentage = Math.round((unlockedCount / totalAchievements) * 100);
+
+    return NextResponse.json({
+      ok: true,
+      achievements,
+      groupedAchievements,
+      stats: {
+        total: totalAchievements,
+        unlocked: unlockedCount,
+        locked: totalAchievements - unlockedCount,
+        new: newCount,
+        completionPercentage,
+      },
+    });
+  } catch (error) {
+    console.error('User Achievements API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}
+
+// POST: Mark achievement as viewed (remove "NEW" badge)
+export async function POST(request: NextRequest) {
+  try {
+    const supabase = createRouteHandlerClient({ cookies });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { achievementId } = body;
+
+    if (!achievementId) {
+      return NextResponse.json(
+        { error: 'Missing achievementId' },
+        { status: 400 }
+      );
+    }
+
+    // Mark as viewed
+    const { error: updateError } = await supabase
+      .from('user_achievements')
+      .update({ is_new: false })
+      .eq('user_id', user.id)
+      .eq('achievement_id', achievementId);
+
+    if (updateError) {
+      console.error('User Achievements API: Error marking as viewed:', updateError);
+      return NextResponse.json(
+        { error: 'Could not update achievement', details: updateError.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      message: 'Achievement marked as viewed',
+    });
+  } catch (error) {
+    console.error('User Achievements API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}

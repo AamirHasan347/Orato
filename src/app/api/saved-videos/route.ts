@@ -1,0 +1,168 @@
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import { NextResponse, NextRequest } from 'next/server';
+
+// GET: Fetch user's saved videos
+export async function GET() {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Fetch user's saved videos
+    const { data: savedVideos, error: savedError } = await supabase
+      .from('saved_videos')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+
+    if (savedError) {
+      console.error('Saved Videos API: Error fetching saved videos:', savedError);
+      return NextResponse.json(
+        { error: 'Could not fetch saved videos', details: savedError.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      savedVideos: savedVideos || [],
+    });
+  } catch (error) {
+    console.error('Saved Videos API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}
+
+// POST: Save a video
+export async function POST(request: NextRequest) {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { videoId, videoTitle } = body;
+
+    if (!videoId || !videoTitle) {
+      return NextResponse.json(
+        { error: 'Missing required fields: videoId and videoTitle' },
+        { status: 400 }
+      );
+    }
+
+    // Save the video
+    const { data: savedVideo, error: saveError } = await supabase
+      .from('saved_videos')
+      .insert({
+        user_id: user.id,
+        video_id: videoId,
+        video_title: videoTitle,
+      })
+      .select()
+      .single();
+
+    if (saveError) {
+      // Check if it's a duplicate error
+      if (saveError.code === '23505') {
+        return NextResponse.json(
+          { error: 'Video already saved' },
+          { status: 409 }
+        );
+      }
+
+      console.error('Saved Videos API: Error saving video:', saveError);
+      return NextResponse.json(
+        { error: 'Could not save video', details: saveError.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      savedVideo,
+      message: 'Video saved successfully!',
+    });
+  } catch (error) {
+    console.error('Saved Videos API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE: Unsave a video
+export async function DELETE(request: NextRequest) {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+
+    // Check authentication
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const videoId = searchParams.get('videoId');
+
+    if (!videoId) {
+      return NextResponse.json(
+        { error: 'Missing videoId parameter' },
+        { status: 400 }
+      );
+    }
+
+    // Delete the saved video
+    const { error: deleteError } = await supabase
+      .from('saved_videos')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('video_id', videoId);
+
+    if (deleteError) {
+      console.error('Saved Videos API: Error deleting saved video:', deleteError);
+      return NextResponse.json(
+        { error: 'Could not unsave video', details: deleteError.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      message: 'Video unsaved successfully!',
+    });
+  } catch (error) {
+    console.error('Saved Videos API: Unexpected error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}
